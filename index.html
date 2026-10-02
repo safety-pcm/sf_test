@@ -42,6 +42,7 @@ table.f th{background:#f0f0f0;font-weight:normal;text-align:center}
 .paper [data-e]:focus{background:#ffef9a}
 .paper .ck{cursor:pointer;font-size:13pt;padding:0 2px}
 table.f td{height:28px}
+@media(max-width:700px){.paper{padding:12px;font-size:10.5pt}.paper h3{font-size:16pt}}
 @page{size:A4;margin:10mm}
 @media print{
  body{background:#fff}.no-print{display:none!important}
@@ -189,8 +190,10 @@ function viewMine(mine) {
    <div class="card"><b>${esc(mine.f.name)}</b> 님 <span class="muted">${esc(mine.f.co)} / ${esc(mine.f.job)}</span><br>
     <span class="muted">잘못 입력한 내용은 수정할 수 있습니다. (안전교육 완료 처리 전까지)</span></div>
    <button class="pri big" id="m_edit">내 정보 수정하기</button>
+   <button class="pri big" id="m_contract">근로계약서 작성하기</button>
    <button class="big" id="m_new">다른 사람 새로 등록하기</button></div>`;
   $('#m_edit').onclick = () => renderForm({ id: mine.id, f: mine.f, admin: false });
+  $('#m_contract').onclick = () => renderContract({ id: mine.id, f: mine.f });
   $('#m_new').onclick = () => { if (confirm('다른 사람을 새로 등록하면, 이 휴대폰에서는 앞서 등록한 ' + mine.f.name + ' 님의 정보를 더 이상 수정할 수 없게 됩니다.\n계속할까요?')) { startNew = true; renderForm(null); } };
 }
 function renderForm(ctx) {
@@ -262,6 +265,7 @@ function renderForm(ctx) {
     if (miss.length) return alert('다음 항목을 확인해 주세요:\n- ' + miss.join('\n- '));
     const fields = { name: v('f_name'), rrn: rrnSame ? rrnOrig : (CONFIG.storeFullRrn ? rrnIn : rrnIn.slice(0, 8)), nat: v('f_nat'), tel: v('f_tel'), addr: v('f_addr'), co: v('f_co'), job: v('f_job') };
     busy = true; $('#submit').textContent = edit ? '저장 중...' : '등록 중...';
+    let rid = edit ? ctx.id : null;
     const reset = () => { busy = false; $('#submit').textContent = edit ? '수정 저장' : '등록하기'; };
     try {
       if (edit) {
@@ -273,7 +277,7 @@ function renderForm(ctx) {
         if (admin) { alert('수정되었습니다.'); location.hash = '#/admin'; return; }
         saveMine({ id: ctx.id, f: fields });
       } else {
-        const id = newId();
+        const id = newId(); rid = id;
         await setDoc(doc(db, COL, id), { ...fields, idPhoto: photos.id, certPhoto: photos.cert, sign: pad.data(), createdAt: serverTimestamp(), todayDate: '', eduDone: false });
         saveMine({ id, f: fields });
       }
@@ -283,8 +287,55 @@ function renderForm(ctx) {
       return alert('처리에 실패했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.\n(' + e.code + ')');
     }
     $('#app').innerHTML = `<div class="wrap"><div class="card" style="text-align:center;margin-top:40px">
-      <h1 class="ok">${edit ? '수정 완료' : '등록 완료'}</h1><p><b>${esc(fields.name)}</b>님, ${edit ? '수정되었습니다.' : '등록되었습니다.<br>안전관리자에게 안전교육을 받으러 가세요.'}</p>
-      <p class="muted">${edit ? '' : '잘못 입력한 내용이 있으면 이 QR을 다시 찍고 “내 정보 수정하기”를 누르세요.'}</p></div></div>`;
+      <h1 class="ok">${edit ? '수정 완료' : '등록 완료'}</h1><p><b>${esc(fields.name)}</b>님, ${edit ? '수정되었습니다.' : '등록되었습니다.<br>이어서 근로계약서를 작성해 주세요.'}</p>
+      <p class="muted">${edit ? '' : '잘못 입력한 내용이 있으면 이 QR을 다시 찍고 “내 정보 수정하기”를 누르세요.'}</p>
+      <button class="pri big" id="go_contract">근로계약서 작성하러 가기</button></div></div>`;
+    $('#go_contract').onclick = () => renderContract({ id: rid, f: fields });
+  };
+}
+
+/* ============ 근로자 근로계약서 작성 화면 ============ */
+const CF_KEY = id => 'qrReg_cf_' + id;
+function bindFill(els, saved, mark) {
+  els.forEach((el, i) => {
+    if (saved && saved[i] !== undefined) el.textContent = saved[i];
+    if (el.classList.contains('ck')) {
+      el.onclick = () => { el.textContent = el.textContent.trim() === '□' ? '☑' : '□'; mark(); };
+    } else {
+      el.contentEditable = 'true';
+      el.onkeydown = e => { if (e.key === 'Enter') e.preventDefault(); };
+      el.onpaste = e => { e.preventDefault(); document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text').replace(/\s+/g, ' ')); };
+      el.oninput = mark;
+    }
+  });
+}
+function renderContract(ctx) {
+  const f = ctx.f, [Y, M, D] = dateParts();
+  let saved = {}; try { saved = JSON.parse(localStorage.getItem(CF_KEY(ctx.id)) || '{}'); } catch {}
+  $('#app').innerHTML = `<div class="wrap">
+    <h1>근로계약서 작성</h1>
+    <div class="muted">노란 칸을 눌러 직접 작성하세요. □ 는 누르면 체크됩니다. 다 작성하면 맨 아래 [근로계약서 제출]을 누르세요. 서명은 등록할 때 입력한 서명이 사용됩니다.</div></div>
+    <div class="paper">${contractHtml({ name: f.name, addr: f.addr, tel: f.tel, job: f.job, co: f.co }, '<span class="muted">(등록 시 서명 사용)</span>', Y, M, D)}</div>
+    <div class="wrap"><button class="pri big" id="c_submit">근로계약서 제출</button>
+    <button class="big" id="c_back">← 돌아가기</button><p class="muted" id="c_stat"></p></div>`;
+  const els = [...document.querySelectorAll('.paper [data-e]')];
+  bindFill(els, saved, () => { $('#c_stat').textContent = '작성 중 (제출해야 저장됩니다)'; });
+  $('#c_back').onclick = () => { startNew = false; viewMine(loadMine() || { id: ctx.id, f }); };
+  let busy = false;
+  $('#c_submit').onclick = async () => {
+    if (busy) return;
+    if (!confirm('근로계약서를 제출할까요? 제출 후에도 안전교육 완료 처리 전까지는 다시 수정할 수 있습니다.')) return;
+    const o = {}; els.forEach((el, i) => { o[i] = el.textContent; });
+    busy = true; $('#c_submit').textContent = '제출 중...';
+    try { await updateDoc(doc(db, COL, ctx.id), { contractFill: o, updatedAt: serverTimestamp() }); }
+    catch (e) {
+      busy = false; $('#c_submit').textContent = '근로계약서 제출';
+      if (e.code === 'permission-denied') return alert('안전교육 완료 처리된 뒤에는 직접 수정할 수 없습니다.\n안전관리자에게 요청해 주세요.');
+      return alert('제출에 실패했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.\n(' + e.code + ')');
+    }
+    try { localStorage.setItem(CF_KEY(ctx.id), JSON.stringify(o)); } catch {}
+    $('#app').innerHTML = `<div class="wrap"><div class="card" style="text-align:center;margin-top:40px">
+      <h1 class="ok">제출 완료</h1><p><b>${esc(f.name)}</b>님, 근로계약서가 제출되었습니다.<br>안전관리자에게 안전교육을 받으러 가세요.</p></div></div>`;
   };
 }
 
@@ -316,7 +367,8 @@ function viewAdmin() {
       <div><b style="font-size:17px">${esc(w.name)}</b> <span class="muted">${esc(w.co)} / ${esc(w.job)} / ${esc(w.nat)}</span><br>
         <span class="muted">${esc(maskRrn(w.rrn))} · ${esc(w.tel)} · 등록 ${when(w)}</span></div>
       <div><span class="${w.idPhoto && w.certPhoto ? 'ok' : 'no'}">${w.idPhoto && w.certPhoto ? '자료 등록 완료' : '사진 누락'}</span><br>
-        <span class="${w.eduDone ? 'ok' : 'no'}">${w.eduDone ? '교육 완료' : '교육 전'}</span></div>
+        <span class="${w.eduDone ? 'ok' : 'no'}">${w.eduDone ? '교육 완료' : '교육 전'}</span><br>
+        <span class="${w.contractFill ? 'ok' : 'no'}">${w.contractFill ? '계약서 작성됨' : '계약서 미작성'}</span></div>
     </div>
     <div class="row" style="margin-top:8px">
       <button class="sm" data-a="today" data-id="${w.id}">${w.todayDate === t ? '금일 출력 해제' : '금일 출력 지정'}</button>
@@ -353,15 +405,9 @@ function viewAdmin() {
 }
 
 /* ============ 출력물 ============ */
-
-async function viewPrint(kind, id) {
-  const w = workers.find(x => x.id === id);
-  if (!w) { $('#app').innerHTML = '<div class="wrap">자료를 찾을 수 없습니다. <a href="#/admin">돌아가기</a></div>'; return; }
-  const [Y, M, D] = dateParts();
-  const sig = w.sign ? `<img class="sigimg" src="${w.sign}">` : '';
-  let body = '';
-  if (kind === 'contract') {
-    body = `<h3>건설일용근로자 표준근로계약서</h3>
+/* ---- 근로계약서 본문 (근로자 작성 화면과 관리자 출력 화면이 같이 사용) ---- */
+function contractHtml(w, sig, Y, M, D) {
+  return `<h3>건설일용근로자 표준근로계약서</h3>
     <div>(사업주) <span class="b x" data-e>${esc(CONFIG.companyName)}</span> (이하 “사업주”라 함)과(와) <b>${esc(w.name)}</b> (이하 “근로자”라 함)은 다음과 같이 근로계약을 체결한다.</div>
     <div>1. 근로계약기간 : <span class="b" data-e></span>년 <span class="b" data-e></span>월 <span class="b" data-e></span>일부터 <span class="b" data-e></span>년 <span class="b" data-e></span>월 <span class="b" data-e></span>일까지<br>
      <span class="n">&nbsp;&nbsp;&nbsp;※ 근로계약기간을 정하지 않는 경우에는 “근로개시일”만 기재</span></div>
@@ -389,6 +435,17 @@ async function viewPrint(kind, id) {
      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;주 소 : <span class="b x" data-e></span> 대 표 자 : <span class="b w" data-e></span> (서명)</div>
     <div style="margin-top:8px">(근로자) 주 소 : <b>${esc(w.addr)}</b><br>
      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;연 락 처 : <b>${esc(w.tel)}</b> &nbsp; 성 명 : <b>${esc(w.name)}</b> (서명) ${sig}</div>`;
+}
+
+
+async function viewPrint(kind, id) {
+  const w = workers.find(x => x.id === id);
+  if (!w) { $('#app').innerHTML = '<div class="wrap">자료를 찾을 수 없습니다. <a href="#/admin">돌아가기</a></div>'; return; }
+  const [Y, M, D] = dateParts();
+  const sig = w.sign ? `<img class="sigimg" src="${w.sign}">` : '';
+  let body = '';
+  if (kind === 'contract') {
+    body = contractHtml(w, sig, Y, M, D);
   } else {
     const rules = ['현장 출·퇴근시간 준수 및 작업복은 항상 단정히 착용한다.', '안전모, 안전대 등 개인보호구는 항상 착용하고 작업에 임한다.', '현장내 이동시 안전한 작업로를 이용하고 정숙보행한다.', '규정된 장소 이외에서의 끽연, 방뇨를 금하며 현장내에서는 절대로 음주행위는 금한다.', '위험기계·기구(둥근톱, 용접기 등) 사용시 안전장치의 설치 및 작동상태를 점검한 후 사용하고 임의로 해체하지 않는다.', '전기기계·기구 사용시 전선의 피복상태, 스위치의 휴즈, 누전차단기 작동상태 등을 사전에 점검하고 젖은 장갑착용 및 습지에서의 사용을 금한다.', '현장내에서 화기 취급시 안전관리자 또는 작업책임자의 허락을 받고 작업후 불씨 제거상태를 필히 확인한다.', '작업중 위험요소 확인시 반드시 안전관리자 또는 작업책임자에게 보고하여 안전조치를 취한 후 작업을 재개한다.', '현장에서 실시하는 안전교육, 안전행사에 적극 참여하여 내 자신의 안전은 스스로 지킬 수 있도록 노력한다.', '기타 안전수칙 및 안전규정을 준수하고 나의 안전은 내 자신은 물론 가족과 동료, 회사 및 국가의 안전과 발전에 원동력임을 깊이 인식하여야 한다.'];
     const c = '①②③④⑤⑥⑦⑧⑨⑩';
