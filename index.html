@@ -38,9 +38,14 @@ table.f{width:100%;border-collapse:collapse;margin:6px 0}
 table.f td,table.f th{border:1px solid #000;padding:5px 7px;font-size:10.5pt}
 table.f th{background:#f0f0f0;font-weight:normal;text-align:center}
 .sigimg{height:36px;vertical-align:middle}
+.paper [data-e]{background:#fff8d6;outline:none}
+.paper [data-e]:focus{background:#ffef9a}
+.paper .ck{cursor:pointer;font-size:13pt;padding:0 2px}
+table.f td{height:28px}
 @page{size:A4;margin:10mm}
 @media print{
  body{background:#fff}.no-print{display:none!important}
+ .paper [data-e]{background:none!important}
  .paper{box-shadow:none;margin:0;padding:0;width:auto}
  .wrap{padding:0;max-width:none}
 }
@@ -52,7 +57,7 @@ table.f th{background:#f0f0f0;font-weight:normal;text-align:center}
 <script type="module">
 import { CONFIG } from './config.js';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore, collection, addDoc, doc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, collection, addDoc, setDoc, doc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 const configured = !!(CONFIG.firebase && CONFIG.firebase.apiKey && !/^여기/.test(CONFIG.firebase.apiKey));
@@ -102,7 +107,7 @@ function sigPad(cv) {
 /* ============ 상태 / 라우터 ============ */
 let user = null, authReady = false, workers = [], dataReady = false, unsub = null;
 const pageOf = () => location.hash.replace(/^#\/?/, '').split('/')[0];
-const isAdminPage = () => ['admin', 'print'].includes(pageOf());
+const isAdminPage = () => ['admin', 'print', 'edit'].includes(pageOf());
 const loading = () => { $('#app').innerHTML = '<div class="wrap"><p class="muted">불러오는 중...</p></div>'; };
 
 function setupAuth() {
@@ -125,10 +130,11 @@ function route() {
   const [page, a, b] = location.hash.replace(/^#\/?/, '').split('/');
   if (!configured) return viewSetup();
   if (page === 'register') return viewRegister();
-  if (page === 'admin' || page === 'print') {
+  if (page === 'admin' || page === 'print' || page === 'edit') {
     if (!authReady) return loading();
     if (!user) return viewLogin();
     if (!dataReady) return loading();
+    if (page === 'edit') { const w = workers.find(x => x.id === a); return w ? renderForm({ id: w.id, f: w, admin: true }) : viewAdmin(); }
     return page === 'admin' ? viewAdmin() : viewPrint(a, b);
   }
   return viewHome();
@@ -165,26 +171,53 @@ function viewLogin() {
   $('#pw').onkeydown = e => { if (e.key === 'Enter') go(); };
 }
 
-/* ============ 근로자 등록 화면 (로그인 없음) ============ */
+/* ============ 근로자 등록 / 수정 화면 (로그인 없음) ============ */
+const MY_KEY = 'qrReg_my_v1';
+let startNew = false;
+const loadMine = () => { try { return JSON.parse(localStorage.getItem(MY_KEY) || 'null'); } catch { return null; } };
+const saveMine = o => { try { localStorage.setItem(MY_KEY, JSON.stringify(o)); } catch {} };
+const newId = () => { const a = new Uint8Array(16); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); };
+
 function viewRegister() {
+  const mine = loadMine();
+  if (mine && mine.id && mine.f && !startNew) return viewMine(mine);
+  startNew = false;
+  renderForm(null);
+}
+function viewMine(mine) {
+  $('#app').innerHTML = `<div class="wrap"><h1>이미 등록하셨습니다</h1>
+   <div class="card"><b>${esc(mine.f.name)}</b> 님 <span class="muted">${esc(mine.f.co)} / ${esc(mine.f.job)}</span><br>
+    <span class="muted">잘못 입력한 내용은 수정할 수 있습니다. (안전교육 완료 처리 전까지)</span></div>
+   <button class="pri big" id="m_edit">내 정보 수정하기</button>
+   <button class="big" id="m_new">다른 사람 새로 등록하기</button></div>`;
+  $('#m_edit').onclick = () => renderForm({ id: mine.id, f: mine.f, admin: false });
+  $('#m_new').onclick = () => { if (confirm('다른 사람을 새로 등록하면, 이 휴대폰에서는 앞서 등록한 ' + mine.f.name + ' 님의 정보를 더 이상 수정할 수 없게 됩니다.\n계속할까요?')) { startNew = true; renderForm(null); } };
+}
+function renderForm(ctx) {
+  const edit = !!ctx, admin = !!(ctx && ctx.admin), f = (ctx && ctx.f) || {};
+  const val = k => esc(f[k] || '');
+  const prev = (k, label) => (admin && f[k]) ? `<img id="v_${label}" src="${f[k]}" alt="">` : `<img id="v_${label}" alt="">`;
   $('#app').innerHTML = `<div class="wrap">
-  <h1>신규 입사자 등록</h1>
+  ${admin ? '<a href="#/admin">← 관리자 화면</a>' : ''}
+  <h1>${edit ? (admin ? '등록 정보 수정 (관리자)' : '등록 정보 수정') : '신규 입사자 등록'}</h1>
   ${CONFIG.siteName ? `<div class="muted">${esc(CONFIG.siteName)}</div>` : ''}
   <div class="muted">빨간 * 표시는 필수 항목입니다.</div>
   <h2>1. 인적사항</h2>
-  <label>성명 <span class="r">*</span></label><input type="text" id="f_name" autocomplete="off">
-  <label>주민등록번호 / 외국인등록번호 <span class="r">*</span></label><input type="tel" id="f_rrn" placeholder="000000-0000000" inputmode="numeric">
-  <label>국적 <span class="r">*</span></label><input type="text" id="f_nat" placeholder="예: 대한민국, 베트남, 중국">
-  <label>연락처 <span class="r">*</span></label><input type="tel" id="f_tel" placeholder="010-0000-0000">
-  <label>주소 <span class="r">*</span></label><input type="text" id="f_addr">
-  <label>소속(협력업체) <span class="r">*</span></label><input type="text" id="f_co">
-  <label>직종 <span class="r">*</span></label><input type="text" id="f_job" placeholder="예: 철근공, 형틀목공, 보통인부">
+  <label>성명 <span class="r">*</span></label><input type="text" id="f_name" autocomplete="off" value="${val('name')}">
+  <label>주민등록번호 / 외국인등록번호 <span class="r">*</span></label><input type="tel" id="f_rrn" placeholder="000000-0000000" inputmode="numeric" value="${val('rrn')}">
+  ${edit && !CONFIG.storeFullRrn ? '<div class="muted">뒷자리는 저장하지 않습니다. 번호를 바꿀 때만 13자리를 다시 입력하세요.</div>' : ''}
+  <label>국적 <span class="r">*</span></label><input type="text" id="f_nat" placeholder="예: 대한민국, 베트남, 중국" value="${val('nat')}">
+  <label>연락처 <span class="r">*</span></label><input type="tel" id="f_tel" placeholder="010-0000-0000" value="${val('tel')}">
+  <label>주소 <span class="r">*</span></label><input type="text" id="f_addr" value="${val('addr')}">
+  <label>소속(협력업체) <span class="r">*</span></label><input type="text" id="f_co" value="${val('co')}">
+  <label>직종 <span class="r">*</span></label><input type="text" id="f_job" placeholder="예: 철근공, 형틀목공, 보통인부" value="${val('job')}">
   <h2>2. 사진 등록</h2>
-  <label>신분증 사진 <span class="r">*</span></label>
-  <div class="photo"><input type="file" accept="image/*" id="p_id"><img id="v_id" alt=""></div>
-  <label>기초안전보건교육 이수증 사진 <span class="r">*</span></label>
-  <div class="photo"><input type="file" accept="image/*" id="p_cert"><img id="v_cert" alt=""></div>
-  <h2>3. 개인정보 수집·이용 동의</h2>
+  ${edit ? '<div class="muted">사진은 이미 등록되어 있습니다. 바꿀 때만 새로 선택하세요.</div>' : ''}
+  <label>신분증 사진 ${edit ? '' : '<span class="r">*</span>'}</label>
+  <div class="photo"><input type="file" accept="image/*" id="p_id">${prev('idPhoto', 'id')}</div>
+  <label>기초안전보건교육 이수증 사진 ${edit ? '' : '<span class="r">*</span>'}</label>
+  <div class="photo"><input type="file" accept="image/*" id="p_cert">${prev('certPhoto', 'cert')}</div>
+  ${edit ? '' : `<h2>3. 개인정보 수집·이용 동의</h2>
   <div class="consent">
    <b>[초안 - 사내 양식으로 교체 필요]</b><br>
    1. 수집 항목: 성명, 주민등록번호(외국인등록번호), 국적, 주소, 연락처, 소속, 직종, 신분증 사진, 기초안전보건교육 이수증 사진, 서명<br>
@@ -192,12 +225,12 @@ function viewRegister() {
    3. 보유 기간: 근로 종료 후 관련 법령에서 정한 기간<br>
    4. 동의를 거부할 권리가 있으나, 거부 시 현장 출입 및 근로계약 체결이 제한될 수 있습니다.
   </div>
-  <label style="font-weight:normal"><input type="checkbox" id="f_agree"> 위 개인정보 수집·이용에 동의합니다. <span class="r">*</span></label>
-  <h2>4. 서명</h2>
-  <div class="muted">아래 칸에 손가락으로 서명해 주세요. 동의서 · 근로계약서 · 안전교육 서약서에 사용됩니다.</div>
+  <label style="font-weight:normal"><input type="checkbox" id="f_agree"> 위 개인정보 수집·이용에 동의합니다. <span class="r">*</span></label>`}
+  <h2>${edit ? '3' : '4'}. 서명</h2>
+  <div class="muted">${edit ? '바꿀 때만 다시 서명하세요. 그대로 두면 기존 서명이 유지됩니다.' : '아래 칸에 손가락으로 서명해 주세요. 동의서 · 근로계약서 · 안전교육 서약서에 사용됩니다.'}</div>
   <canvas class="sig" id="sig" width="700" height="220"></canvas>
   <div class="row" style="margin-top:6px"><button type="button" class="sm" id="sigclr">서명 지우기</button></div>
-  <button class="pri big" id="submit">등록하기</button>
+  <button class="pri big" id="submit">${edit ? '수정 저장' : '등록하기'}</button>
   </div>`;
   const photos = { id: null, cert: null };
   const pad = sigPad($('#sig'));
@@ -206,8 +239,8 @@ function viewRegister() {
   $('#f_tel').oninput = e => e.target.value = fmtTel(e.target.value);
   for (const k of ['id', 'cert']) {
     $('#p_' + k).onchange = async e => {
-      const f = e.target.files[0]; if (!f) return;
-      try { photos[k] = await shrink(f); $('#v_' + k).src = photos[k]; }
+      const file = e.target.files[0]; if (!file) return;
+      try { photos[k] = await shrink(file); $('#v_' + k).src = photos[k]; }
       catch { alert('사진을 읽을 수 없습니다. 다시 선택해 주세요.'); }
     };
   }
@@ -215,21 +248,43 @@ function viewRegister() {
   $('#submit').onclick = async () => {
     if (busy) return;
     const v = id => $('#' + id).value.trim();
-    const rrnFull = v('f_rrn');
+    const rrnIn = v('f_rrn'), rrnOrig = f.rrn || '';
+    const rrnSame = edit && rrnIn === rrnOrig;
     const miss = [];
-    if (!v('f_name')) miss.push('성명'); if (!/^\d{6}-\d{7}$/.test(rrnFull)) miss.push('주민(외국인)등록번호 13자리');
+    if (!v('f_name')) miss.push('성명');
+    if (!rrnSame && !/^\d{6}-\d{7}$/.test(rrnIn)) miss.push('주민(외국인)등록번호 13자리');
     if (!v('f_nat')) miss.push('국적'); if (v('f_tel').replace(/\D/g, '').length < 10) miss.push('연락처');
     if (!v('f_addr')) miss.push('주소'); if (!v('f_co')) miss.push('소속'); if (!v('f_job')) miss.push('직종');
-    if (!photos.id) miss.push('신분증 사진'); if (!photos.cert) miss.push('이수증 사진');
-    if (!$('#f_agree').checked) miss.push('개인정보 동의 체크'); if (!pad.has()) miss.push('서명');
+    if (!edit) {
+      if (!photos.id) miss.push('신분증 사진'); if (!photos.cert) miss.push('이수증 사진');
+      if (!$('#f_agree').checked) miss.push('개인정보 동의 체크'); if (!pad.has()) miss.push('서명');
+    }
     if (miss.length) return alert('다음 항목을 확인해 주세요:\n- ' + miss.join('\n- '));
-    const data = { name: v('f_name'), rrn: CONFIG.storeFullRrn ? rrnFull : rrnFull.slice(0, 8), nat: v('f_nat'), tel: v('f_tel'), addr: v('f_addr'), co: v('f_co'), job: v('f_job'),
-      idPhoto: photos.id, certPhoto: photos.cert, sign: pad.data(), createdAt: serverTimestamp(), todayDate: '', eduDone: false };
-    busy = true; $('#submit').textContent = '등록 중...';
-    try { await addDoc(collection(db, COL), data); }
-    catch (e) { busy = false; $('#submit').textContent = '등록하기'; return alert('등록에 실패했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.\n(' + e.code + ')'); }
+    const fields = { name: v('f_name'), rrn: rrnSame ? rrnOrig : (CONFIG.storeFullRrn ? rrnIn : rrnIn.slice(0, 8)), nat: v('f_nat'), tel: v('f_tel'), addr: v('f_addr'), co: v('f_co'), job: v('f_job') };
+    busy = true; $('#submit').textContent = edit ? '저장 중...' : '등록 중...';
+    const reset = () => { busy = false; $('#submit').textContent = edit ? '수정 저장' : '등록하기'; };
+    try {
+      if (edit) {
+        const upd = { ...fields, updatedAt: serverTimestamp() };
+        if (photos.id) upd.idPhoto = photos.id;
+        if (photos.cert) upd.certPhoto = photos.cert;
+        if (pad.has()) upd.sign = pad.data();
+        await updateDoc(doc(db, COL, ctx.id), upd);
+        if (admin) { alert('수정되었습니다.'); location.hash = '#/admin'; return; }
+        saveMine({ id: ctx.id, f: fields });
+      } else {
+        const id = newId();
+        await setDoc(doc(db, COL, id), { ...fields, idPhoto: photos.id, certPhoto: photos.cert, sign: pad.data(), createdAt: serverTimestamp(), todayDate: '', eduDone: false });
+        saveMine({ id, f: fields });
+      }
+    } catch (e) {
+      reset();
+      if (e.code === 'permission-denied' && edit) return alert('안전교육 완료 처리된 뒤에는 직접 수정할 수 없습니다.\n안전관리자에게 요청해 주세요.');
+      return alert('처리에 실패했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.\n(' + e.code + ')');
+    }
     $('#app').innerHTML = `<div class="wrap"><div class="card" style="text-align:center;margin-top:40px">
-      <h1 class="ok">등록 완료</h1><p><b>${esc(data.name)}</b>님, 등록되었습니다.<br>안전관리자에게 안전교육을 받으러 가세요.</p></div></div>`;
+      <h1 class="ok">${edit ? '수정 완료' : '등록 완료'}</h1><p><b>${esc(fields.name)}</b>님, ${edit ? '수정되었습니다.' : '등록되었습니다.<br>안전관리자에게 안전교육을 받으러 가세요.'}</p>
+      <p class="muted">${edit ? '' : '잘못 입력한 내용이 있으면 이 QR을 다시 찍고 “내 정보 수정하기”를 누르세요.'}</p></div></div>`;
   };
 }
 
@@ -267,6 +322,7 @@ function viewAdmin() {
       <button class="sm" data-a="today" data-id="${w.id}">${w.todayDate === t ? '금일 출력 해제' : '금일 출력 지정'}</button>
       <button class="sm" data-a="edu" data-id="${w.id}">${w.eduDone ? '교육 완료 취소' : '교육 완료 처리'}</button>
       <button class="sm" data-a="photo" data-id="${w.id}">사진 보기</button>
+      <a class="btn sm" href="#/edit/${w.id}">정보 수정</a>
       <a class="btn sm" href="#/print/contract/${w.id}">근로계약서</a>
       <a class="btn sm" href="#/print/edu/${w.id}">안전교육·보호구 지급</a>
       <button class="sm" data-a="del" data-id="${w.id}">삭제</button>
@@ -324,7 +380,7 @@ async function viewPrint(kind, id) {
      &nbsp;- 임금지급일 : 매월(매주 또는 매일) <span class="b" data-e></span>일(휴일의 경우는 전일 지급)<br>
      &nbsp;- 지급방법 : 근로자에게 직접지급( <span class="b" data-e></span> ), 근로자 명의 예금통장에 입금( <span class="b" data-e></span> )</div>
     <div>7. 연차유급휴가<br>&nbsp;- 연차유급휴가는 근로기준법에서 정하는 바에 따라 부여함</div>
-    <div>8. 사회보험 적용여부(해당란에 체크)<br>&nbsp;□ 고용보험 &nbsp;□ 산재보험 &nbsp;□ 국민연금 &nbsp;□ 건강보험</div>
+    <div>8. 사회보험 적용여부(해당란에 체크)<br>&nbsp;<span class="ck" data-e>□</span> 고용보험 &nbsp;<span class="ck" data-e>□</span> 산재보험 &nbsp;<span class="ck" data-e>□</span> 국민연금 &nbsp;<span class="ck" data-e>□</span> 건강보험</div>
     <div>9. 근로계약서 교부<br>&nbsp;- “사업주”는 근로계약을 체결함과 동시에 본 계약서를 사본하여 “근로자”의 교부요구와 관계없이 “근로자”에게 교부함(근로기준법 제17조 이행)</div>
     <div>10. 근로계약, 취업규칙 등의 성실한 이행의무<br>&nbsp;- 사업주와 근로자는 각자가 근로계약, 취업규칙, 단체협약을 지키고 성실하게 이행하여야 함</div>
     <div>11. 기 타<br>&nbsp;- 이 계약에 정함이 없는 사항은 근로기준법령에 의함</div>
@@ -361,12 +417,37 @@ async function viewPrint(kind, id) {
     <div style="text-align:right">성 명 : <b>${esc(w.name)}</b> (인) ${sig}</div>
     <div style="margin-top:8px"><b>${esc(CONFIG.siteName)} 현장 소장 귀하</b></div>`;
   }
+  const fillKey = kind === 'contract' ? 'contractFill' : 'eduFill';
   $('#app').innerHTML = `<div class="wrap no-print">
     <div class="row"><a class="btn" href="#/admin">← 관리자 화면</a>
-    <button class="pri" onclick="window.print()">인쇄 / PDF 저장</button></div>
-    <div class="muted" style="margin-top:6px">※ 밑줄 빈칸(사업주 기재 항목)은 화면에서 눌러 직접 입력한 뒤 인쇄할 수 있습니다. 입력 내용은 저장되지 않습니다.</div></div>
+    <button class="pri" id="p_save">저장</button>
+    <button id="p_print">저장 후 인쇄 / PDF</button>
+    <span class="muted" id="p_stat"></span></div>
+    <div class="muted" style="margin-top:6px">※ 노란 칸을 눌러 직접 작성하세요. □ 는 누르면 체크됩니다. 작성한 뒤 저장하면 다음에 열어도 그대로 불러옵니다.</div></div>
     <div class="paper">${body}</div>`;
-  document.querySelectorAll('[data-e]').forEach(el => el.contentEditable = 'true');
+  const els = [...document.querySelectorAll('.paper [data-e]')];
+  const saved = w[fillKey] || {};
+  let dirty = false;
+  const mark = () => { dirty = true; $('#p_stat').textContent = '수정됨 (저장 필요)'; };
+  els.forEach((el, i) => {
+    if (saved[i] !== undefined) el.textContent = saved[i];
+    if (el.classList.contains('ck')) {
+      el.onclick = () => { el.textContent = el.textContent.trim() === '□' ? '☑' : '□'; mark(); };
+    } else {
+      el.contentEditable = 'true';
+      el.onkeydown = e => { if (e.key === 'Enter') e.preventDefault(); };
+      el.onpaste = e => { e.preventDefault(); document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text').replace(/\s+/g, ' ')); };
+      el.oninput = mark;
+    }
+  });
+  const save = async () => {
+    const o = {}; els.forEach((el, i) => { o[i] = el.textContent; });
+    $('#p_stat').textContent = '저장 중...';
+    try { await updateDoc(doc(db, COL, w.id), { [fillKey]: o }); dirty = false; $('#p_stat').textContent = '저장되었습니다.'; return true; }
+    catch (e) { $('#p_stat').textContent = '저장 실패: ' + e.code; return false; }
+  };
+  $('#p_save').onclick = save;
+  $('#p_print').onclick = async () => { if (!dirty || await save()) window.print(); };
 }
 
 if (configured) setupAuth();
